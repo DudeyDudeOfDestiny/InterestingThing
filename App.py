@@ -6,32 +6,31 @@ import requests
 app = Flask(__name__)
 CORS(app)
 
-# A list of completely different public servers. If one fails, your app tries the next!
-FALLBACK_NODES = [
+# A robust list of premium, high-uptime public fallback instances
+FALLBACK_INSTANCES = [
     "https://inv.tux.digital",
     "https://yewtu.be",
     "https://invidious.nerdvpn.de",
-    "https://invidious.flokinet.to",
-    "https://iv.melmac.space"
+    "https://iv.melmac.space",
+    "https://invidious.flokinet.to"
 ]
 
-def get_working_nodes():
+def get_working_instances():
+    """Fetches public nodes from the registry, falling back to a hardcoded list on failure."""
     try:
-        # Ask the global registry for active servers
-        res = requests.get("https://api.invidious.io/instances.json?sort_by=type,api,users", timeout=3)
+        res = requests.get("https://api.invidious.io/instances.json?sort_by=type,api,users", timeout=4)
         if res.status_code == 200:
             instances = res.json()
             valid_urls = []
             for inst in instances:
                 data = inst[1]
-                # Check if the server's API is on and it isn't marked as 'down'
                 if data.get("api") and data.get("type") == "https" and not data.get("monitor", {}).get("down"):
                     valid_urls.append(data.get("uri"))
             if valid_urls:
                 return valid_urls
     except Exception:
         pass
-    return FALLBACK_NODES
+    return FALLBACK_INSTANCES
 
 @app.route('/api/search', methods=['GET'])
 def search():
@@ -39,20 +38,19 @@ def search():
     if not query:
         return jsonify({"error": "Missing search query"}), 400
         
-    nodes = get_working_nodes()
+    nodes = get_working_instances()
     
-    # Try up to 4 different community servers until one responds successfully
+    # Cycle through nodes sequentially until one successfully returns data
     for node in nodes[:4]: 
         search_endpoint = f"{node}/api/v1/search"
         try:
-            print(f"Trying community node: {node}")
             response = requests.get(search_endpoint, params={"q": query, "type": "video"}, timeout=4)
             if response.status_code == 200:
                 raw_results = response.json()
                 
                 processed_videos = []
                 for video in raw_results[:5]:
-                    if video.get("type") == "video":
+                    if video.get("type") == "video":  # Filter out channels/playlists
                         processed_videos.append({
                             "title": video.get("title"),
                             "videoId": video.get("videoId"),
@@ -61,10 +59,9 @@ def search():
                         })
                 return jsonify(processed_videos)
         except Exception:
-            print(f"Node {node} failed/timed out. Moving to next...")
-            continue 
+            continue # If a node times out, skip to the next healthy one seamlessly
             
-    return jsonify({"error": "All public nodes are busy right now."}), 502
+    return jsonify({"error": "All public community nodes are currently congested. Try again in a moment."}), 502
 
 if __name__ == '__main__':
     port = int(os.environ.get("PORT", 5000))
